@@ -94,11 +94,11 @@ Inspecting the file revealed developer comments containing staging credentials.
 | Developer Note (temporary)
 |--------------------------------------------------------------------------
 | Admin test account for staging environment
-| Email: admin@mediahub.thm
+| Email: [ REDACTED ]
 |
 | Password policy reminder:
 | Admin password follows company format:
-| MediaHub + any year
+| [ REDACTED ]
 |
 | TODO: remove before production deployment
 */
