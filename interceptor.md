@@ -104,13 +104,7 @@ Inspecting the file revealed developer comments containing staging credentials.
 */
 ```
 
-## Valid Credentials
-
-```text id="jlwmr3"
-admin@mediahub.thm : MediaHub2026
-```
-
-Successfully authenticated to the application.
+Successfully authenticated to the application by using the credentials above.
 
 ---
 
